@@ -1,0 +1,50 @@
+# Прошивка «Станция Nexi» для платы LCDWIKI ES3C28P (2.8" ESP32-S3): xiaozhi-esp32 на русском + патч firmware/patch_xiaozhi.py
+# (телефон с Nexi в той же Wi-Fi — разговор через него, нет телефона — через xiaozhi.me).
+# Собирается вручную (Actions → «Станция: прошивка Xiaozhi» → Run) или при изменении этого файла.
+name: "Станция Nexi: прошивка"
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/build.yml", "firmware/**"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:release-v6.1
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: nexi
+
+      - name: Скачать xiaozhi-esp32 и превратить в станцию Nexi
+        shell: bash
+        run: |
+          git clone --depth 1 https://github.com/78/xiaozhi-esp32 xiaozhi
+          python3 nexi/firmware/patch_xiaozhi.py xiaozhi
+
+      - name: Собрать (плата quandong/esp32-s3-spi-2.8, русский язык)
+        shell: bash
+        working-directory: xiaozhi
+        run: |
+          source "$IDF_PATH/export.sh"
+          python scripts/build.py quandong/esp32-s3-spi-2.8 --language ru-RU
+          cp build/merged-binary.bin ../nexi-station-es3c28p.bin
+          echo "XZ_VER=$(git describe --tags --always)" >> "$GITHUB_ENV"
+
+      - name: Выложить в Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: station
+          name: "Станция Nexi — прошивка для ES3C28P"
+          prerelease: true
+          files: nexi-station-es3c28p.bin
+          body: |
+            «Станция Nexi» на основе xiaozhi-esp32 (${{ env.XZ_VER }}) для платы LCDWIKI ES3C28P 2.8" ESP32-S3.
+            Телефон с Nexi в той же Wi-Fi (включена «Станция» в настройках Nexi) — отвечает Nexi своим голосом; нет телефона — xiaozhi.me.
+            Прошивать с адреса 0x0 (espressif.github.io/esptool-js). Стирать перед прошивкой не обязательно — тогда Wi-Fi и активация сохранятся.
