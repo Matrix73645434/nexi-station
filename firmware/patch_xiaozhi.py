@@ -6,6 +6,7 @@ from pathlib import Path
 root = Path(sys.argv[1])
 here = Path(__file__).parent
 shutil.copy(here / "nexi_station.h", root / "main" / "nexi_station.h")
+shutil.copy(here / "nexi_ota.h", root / "main" / "nexi_ota.h")
 
 
 def patch(rel, old, new, count=1):
@@ -18,9 +19,9 @@ def patch(rel, old, new, count=1):
 
 
 app = "main/application.cc"
-patch(app, '#include "websocket_protocol.h"\n', '#include "websocket_protocol.h"\n#include "nexi_station.h"\n')
+patch(app, '#include "websocket_protocol.h"\n', '#include "websocket_protocol.h"\n#include "nexi_station.h"\n#include "nexi_ota.h"\n')
 # Bluetooth — сразу при включении, ещё до Wi-Fi (телефон может подключиться заранее)
-patch(app, "    // Start network asynchronously\n    board.StartNetwork();", "    nexi::ble::Start();\n    nexi::tcp::Start();\n    nexi::alarm::Start();\n    // Start network asynchronously\n    board.StartNetwork();")
+patch(app, "    // Start network asynchronously\n    board.StartNetwork();", "    nexi::ble::Start();\n    nexi::tcp::Start();\n    nexi::alarm::Start();\n    nexi::ota::Start();\n    // Start network asynchronously\n    board.StartNetwork();")
 # протокол: телефон по Bluetooth или xiaozhi
 patch(app, "    if (ota_->HasMqttConfig()) {\n        protocol_ = std::make_unique<MqttProtocol>();",
       "    nexi::ble::Start();\n"
@@ -162,3 +163,6 @@ patch(_board, """        GetBacklight()->SetBrightness(100);
     }""")
 
 print("xiaozhi → станция Nexi (Bluetooth): ok")
+
+# обновление по воздуху (nexi_ota.h): HTTPS-клиент и OTA из ESP-IDF
+patch("main/CMakeLists.txt", "                        app_update\n", "                        app_update\n                        esp_http_client\n                        esp_https_ota\n")

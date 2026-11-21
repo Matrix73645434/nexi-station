@@ -27,6 +27,8 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/78/xiaozhi-esp32 xiaozhi
           python3 nexi/firmware/patch_xiaozhi.py xiaozhi
+          # номер версии для обновления по воздуху: каждая сборка новее предыдущей
+          echo "#define NEXI_FW_VERSION ${{ github.run_number }}" > xiaozhi/main/nexi_version.h
 
       - name: Собрать (плата quandong/esp32-s3-spi-2.8, русский язык)
         shell: bash
@@ -35,6 +37,14 @@ jobs:
           source "$IDF_PATH/export.sh"
           python scripts/build.py quandong/esp32-s3-spi-2.8 --language ru-RU
           cp build/merged-binary.bin ../nexi-station-es3c28p.bin
+          # для обновления по Wi-Fi — только сама программа (без загрузчика и ресурсов)
+          cp build/xiaozhi.bin ../nexi-station-ota.bin
+          SIZE=$(stat -c %s build/xiaozhi.bin)
+          echo "app size: $SIZE"
+          test "$SIZE" -lt 4128768   # должна влезать в слот ota_0/ota_1 (0x3f0000)
+          printf '{"version": %s, "url": "https://github.com/%s/releases/download/station/nexi-station-ota.bin", "size": %s}\n' \
+            "${{ github.run_number }}" "${{ github.repository }}" "$SIZE" > ../ota.json
+          cat ../ota.json
           echo "XZ_VER=$(git describe --tags --always)" >> "$GITHUB_ENV"
 
       - name: Выложить в Releases
@@ -43,8 +53,12 @@ jobs:
           tag_name: station
           name: "Станция Nexi — прошивка для ES3C28P"
           prerelease: true
-          files: nexi-station-es3c28p.bin
+          files: |
+            nexi-station-es3c28p.bin
+            nexi-station-ota.bin
+            ota.json
           body: |
             «Станция Nexi» на основе xiaozhi-esp32 (${{ env.XZ_VER }}) для платы LCDWIKI ES3C28P 2.8" ESP32-S3.
             Телефон с Nexi в той же Wi-Fi (включена «Станция» в настройках Nexi) — отвечает Nexi своим голосом; нет телефона — xiaozhi.me.
+            Версия ${{ github.run_number }}. Колонки с этой прошивкой обновляются сами по Wi‑Fi (раз в 6 часов) — через ota.json.
             Прошивать с адреса 0x0 (espressif.github.io/esptool-js). Стирать перед прошивкой не обязательно — тогда Wi-Fi и активация сохранятся.
