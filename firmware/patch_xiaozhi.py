@@ -166,3 +166,14 @@ print("xiaozhi → станция Nexi (Bluetooth): ok")
 
 # обновление по воздуху (nexi_ota.h): HTTPS-клиент и OTA из ESP-IDF
 patch("main/CMakeLists.txt", "                        app_update\n", "                        app_update\n                        esp_http_client\n                        esp_https_ota\n")
+
+# нет Wi-Fi: вместо «подключись к точке Xiaozhi-XXXX и открой 192.168.4.1» — подсказка про приложение Nexi
+wb = "main/boards/common/wifi_board.cc"
+patch(wb, 'config.ssid_prefix = "Xiaozhi";', 'config.ssid_prefix = "Nexi";')
+patch(wb, """        std::string hint = Lang::Strings::CONNECT_TO_HOTSPOT;
+        hint += wifi_manager.GetApSsid();
+        hint += Lang::Strings::ACCESS_VIA_BROWSER;
+        hint += wifi_manager.GetApWebUrl();
+""", """        (void)wifi_manager;
+        std::string hint = "Подключите Wi-Fi в приложении Nexi:\\nНастройки → Станция Nexi → Wi-Fi";
+""")
