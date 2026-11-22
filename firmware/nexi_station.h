@@ -451,7 +451,12 @@ inline void Start() {
 }  // namespace alarm
 
 // ------------------------------------------------------------------ служебное от телефона: время, будильник, Wi-Fi
+// экран колонки (nexi_ui.h) подставляет сюда открытие игры: телефон услышал «давай сыграем»
+inline void (*on_game)(const char* name) = nullptr;
+
 inline void handle_nexi(cJSON* root) {
+    cJSON* g = cJSON_GetObjectItem(root, "game");
+    if (cJSON_IsString(g) && on_game) on_game(g->valuestring);
     cJSON* t = cJSON_GetObjectItem(root, "time");
     if (cJSON_IsNumber(t) && t->valuedouble > 1700000000) {
         timeval tv = {.tv_sec = (time_t)t->valuedouble, .tv_usec = 0};

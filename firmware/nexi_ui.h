@@ -274,7 +274,7 @@ inline int nexi_move() {
 inline void finish(int w) {
     over = true;
     static const char* const lose[] = {"Ты победил! Реванш?", "Ладно, ты сильнее... пока что", "Повезло! Ещё раз?"};
-    static const char* const win[] = {"Я победила! Ещё?", "Хе-хе, моя взяла", "Не расстраивайся, бывает"};
+    static const char* const win[] = {"Я победил! Ещё?", "Хе-хе, моя взяла", "Не расстраивайся, бывает"};
     static const char* const drw[] = {"Ничья! Ещё?", "Ничья. Достойно!", "Никто не сдался"};
     if (w == 1) { you++; say(pick(lose, 3)); }
     else if (w == 2) { nexi++; say(pick(win, 3)); }
@@ -282,7 +282,7 @@ inline void finish(int w) {
     draw();
 }
 inline void nexi_turn(lv_timer_t*) {
-    if (over || !root || panel != root) return;   // игру закрыли, пока Nexi «думала»
+    if (over || !root || panel != root) return;   // игру закрыли, пока Nexi «думал»
     int m = nexi_move();
     if (m >= 0) cell[m] = 2;
     draw();
@@ -294,7 +294,7 @@ inline void reset() {
     over = false;
     nexi_first = !nexi_first;
     draw();
-    if (nexi_first) { say("Я хожу первой..."); later(nexi_turn, 600); }
+    if (nexi_first) { say("Я хожу первым..."); later(nexi_turn, 600); }
     else say("Твой ход: ты — X");
 }
 inline void tap(lv_event_t* e) {
@@ -433,9 +433,6 @@ inline void open_panel() {
         lv_label_set_text(lv_obj_get_child((lv_obj_t*)lv_event_get_target(e), 0), scr_txt);
     });
     lv_obj_set_width(so, LV_PCT(100));
-
-    lv_obj_t* g = button(panel, "Крестики-нолики", [](lv_event_t*) { lv_async_call([](void*) { open_game(); }, nullptr); });
-    lv_obj_set_width(g, LV_PCT(100));
 }
 
 // экран первой настройки: приветствие, кружок для нажатия, «готово»
@@ -530,6 +527,7 @@ inline void Init(i2c_master_bus_handle_t bus) {
         screen_mode = s.GetInt("screenp", 0) & 3;
     }
     nexi::alarm::on_ui = alarm_ui;
+    nexi::on_game = [](const char*) { lv_async_call([](void*) { scr_wake(); open_game(); }, nullptr); };
     nexi::alarm::show();
     if (screen_mode) apply_screen();
     esp_lcd_touch_config_t cfg = {};
