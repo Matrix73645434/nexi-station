@@ -42,8 +42,14 @@ jobs:
           SIZE=$(stat -c %s build/xiaozhi.bin)
           echo "app size: $SIZE"
           test "$SIZE" -lt 4128768   # должна влезать в слот ota_0/ota_1 (0x3f0000)
-          printf '{"version": %s, "url": "https://github.com/%s/releases/download/station/nexi-station-ota.bin", "size": %s}\n' \
-            "${{ github.run_number }}" "${{ github.repository }}" "$SIZE" > ../ota.json
+          # ресурсы (слово «Некси», звуки, шрифты) — отдельный файл; колонка качает его, только если хэш изменился
+          ASSETS=build/generated_assets.bin
+          [ -f "$ASSETS" ] || ASSETS=build/configured_assets.bin
+          ls -la build/*assets*.bin
+          cp "$ASSETS" ../nexi-station-assets.bin
+          AHASH=$(sha256sum "$ASSETS" | cut -c1-16)
+          printf '{"version": %s, "url": "https://github.com/%s/releases/download/station/nexi-station-ota.bin", "size": %s, "assets": "%s", "assets_url": "https://github.com/%s/releases/download/station/nexi-station-assets.bin"}\n' \
+            "${{ github.run_number }}" "${{ github.repository }}" "$SIZE" "$AHASH" "${{ github.repository }}" > ../ota.json
           cat ../ota.json
           echo "XZ_VER=$(git describe --tags --always)" >> "$GITHUB_ENV"
 
@@ -56,6 +62,7 @@ jobs:
           files: |
             nexi-station-es3c28p.bin
             nexi-station-ota.bin
+            nexi-station-assets.bin
             ota.json
           body: |
             «Станция Nexi» на основе xiaozhi-esp32 (${{ env.XZ_VER }}) для платы LCDWIKI ES3C28P 2.8" ESP32-S3.
