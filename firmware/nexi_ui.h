@@ -1,4 +1,4 @@
-// Станция Nexi: сенсор экрана и кнопка настроек (громкость, яркость, тема) прямо на колонке.
+// Станция Nexi: сенсор экрана и кнопка настроек (громкость, яркость, тема, гашение экрана) прямо на колонке.
 // Подключается в файле платы quandong/esp32-s3-spi-2.8 после создания дисплея.
 #pragma once
 
@@ -15,6 +15,7 @@
 #include "lvgl_theme.h"
 #include "settings.h"
 #include "nexi_station.h"
+#include "nexi_ota.h"
 
 namespace nexi::ui {
 
@@ -29,6 +30,32 @@ inline void apply_screen() {
     if (lcd) esp_lcd_panel_mirror(lcd, screen_mode & 1, screen_mode & 2);
 }
 inline lv_obj_t* panel = nullptr;
+
+// ------------------------------------------------------------------ экран гаснет, когда колонкой не пользуются
+// Касание, разговор, будильник, обновление — экран загорается. Первое касание по тёмному экрану только будит его.
+inline int scr_off_sec = 60;               // 0 — не гасить; выбирается в настройках, хранится в NVS «scroff»
+inline volatile uint32_t last_act = 0;      // lv_tick последней активности
+inline volatile bool scr_dark = false;
+inline volatile bool eat_touch = false;     // палец, разбудивший экран, интерфейсу не отдаём
+inline bool wiz_step_active();
+inline bool panel_open();
+inline void scr_wake() {
+    last_act = lv_tick_get();
+    if (!scr_dark) return;
+    scr_dark = false;
+    auto* b = Board::GetInstance().GetBacklight();
+    if (b) b->RestoreBrightness();
+}
+inline void scr_tick(lv_timer_t*) {
+    auto& app = Application::GetInstance();
+    bool busy = app.GetDeviceState() != kDeviceStateIdle || nexi::alarm::ringing || nexi::ota::progress >= 0 || wiz_step_active();
+    if (busy) { scr_wake(); return; }
+    if (scr_dark || scr_off_sec <= 0 || panel_open()) return;
+    if (lv_tick_elaps(last_act) > (uint32_t)scr_off_sec * 1000) {
+        auto* b = Board::GetInstance().GetBacklight();
+        if (b) { b->SetBrightness(0, false); scr_dark = true; }
+    }
+}
 
 /** «Сырые» координаты сенсора (портрет 240×320) → точка на экране при повороте касания mode. */
 inline void map_touch(int mode, int rx, int ry, int& ox, int& oy) {
@@ -52,6 +79,8 @@ inline bool wiz_down = false;
 inline bool wiz_skip = false;   // палец ещё держит звезду, которой запустили настройку — ждём, пока отпустит
 inline int wiz_last[2];
 inline void wiz_show(void*);
+inline bool wiz_step_active() { return wiz_step >= 0; }
+inline bool panel_open() { return panel != nullptr; }
 
 inline void wiz_target(int i, int& x, int& y) {
     lv_display_t* d = lv_display_get_default();
@@ -101,6 +130,11 @@ inline void touch_read(lv_indev_t*, lv_indev_data_t* data) {
     uint16_t x[1], y[1];
     uint8_t cnt = 0;
     bool down = esp_lcd_touch_get_coordinates(tp, x, y, nullptr, &cnt, 1) && cnt > 0;
+    if (down) {
+        if (scr_dark) { eat_touch = true; lv_async_call([](void*) { scr_wake(); }, nullptr); }
+        last_act = lv_tick_get();
+    }
+    if (eat_touch) { if (!down) eat_touch = false; return; }
     if (wiz_step >= 0) {
         // идёт первая настройка: касания не отдаём интерфейсу, а запоминаем «сырые»
         if (wiz_skip) { if (!down) wiz_skip = false; return; }
@@ -168,11 +202,17 @@ inline lv_obj_t* slider_row(lv_obj_t* parent, const char* title, int min, int ma
     lv_obj_remove_style_all(row);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(row, 6, 0);
-    label(row, title);
+    lv_obj_set_style_pad_row(row, 12, 0);
+    // кружок бегунка шире самой полоски — даём ему место по краям и не обрезаем
+    lv_obj_set_style_pad_hor(row, 12, 0);
+    lv_obj_set_style_pad_bottom(row, 8, 0);
+    lv_obj_add_flag(row, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+    lv_obj_t* t = label(row, title);
+    lv_obj_set_style_translate_x(t, -12, 0);
     lv_obj_t* s = lv_slider_create(row);
-    lv_obj_set_width(s, LV_PCT(92));
-    lv_obj_set_height(s, 14);
+    lv_obj_set_width(s, LV_PCT(100));
+    lv_obj_set_height(s, 12);
+    lv_obj_add_flag(s, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
     lv_slider_set_range(s, min, max);
     lv_slider_set_value(s, value, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(s, lv_color_hex(0x7C5CFF), LV_PART_INDICATOR);
@@ -216,13 +256,35 @@ inline void open_panel() {
     });
 
     // экран вертикальный и узкий — кнопки друг под другом, панель листается
-    lv_obj_t* th = button(panel, "Тема: светлая / тёмная", [](lv_event_t*) {
+    auto* disp = board.GetDisplay();
+    bool dark = disp && disp->GetTheme() && disp->GetTheme()->name() == "dark";
+    lv_obj_t* th = button(panel, dark ? "Тёмная тема" : "Светлая тема", [](lv_event_t* e) {
         auto* d = Board::GetInstance().GetDisplay();
         if (!d || !d->GetTheme()) return;
-        auto* t = LvglThemeManager::GetInstance().GetTheme(d->GetTheme()->name() == "dark" ? "light" : "dark");
-        if (t) d->SetTheme(t);
+        bool to_dark = d->GetTheme()->name() != "dark";
+        auto* t = LvglThemeManager::GetInstance().GetTheme(to_dark ? "dark" : "light");
+        if (!t) return;
+        d->SetTheme(t);
+        lv_obj_t* b = (lv_obj_t*)lv_event_get_target(e);
+        lv_label_set_text(lv_obj_get_child(b, 0), to_dark ? "Тёмная тема" : "Светлая тема");
     });
     lv_obj_set_width(th, LV_PCT(100));
+
+    // через сколько гаснет экран: 30 с → 1 мин → 5 мин → никогда
+    static char scr_txt[40];
+    auto scr_name = []() {
+        snprintf(scr_txt, sizeof(scr_txt), scr_off_sec <= 0 ? "Экран: не гасить" : scr_off_sec < 60 ? "Экран гаснет: %d с" : "Экран гаснет: %d мин",
+                 scr_off_sec < 60 ? scr_off_sec : scr_off_sec / 60);
+        return (const char*)scr_txt;
+    };
+    lv_obj_t* so = button(panel, scr_name(), [](lv_event_t* e) {
+        scr_off_sec = scr_off_sec == 30 ? 60 : scr_off_sec == 60 ? 300 : scr_off_sec == 300 ? 0 : 30;
+        { Settings st("nexi", true); st.SetInt("scroff", scr_off_sec); }
+        snprintf(scr_txt, sizeof(scr_txt), scr_off_sec <= 0 ? "Экран: не гасить" : scr_off_sec < 60 ? "Экран гаснет: %d с" : "Экран гаснет: %d мин",
+                 scr_off_sec < 60 ? scr_off_sec : scr_off_sec / 60);
+        lv_label_set_text(lv_obj_get_child((lv_obj_t*)lv_event_get_target(e), 0), scr_txt);
+    });
+    lv_obj_set_width(so, LV_PCT(100));
 }
 
 // экран первой настройки: приветствие, кружок для нажатия, «готово»
@@ -321,6 +383,7 @@ inline void Init(i2c_master_bus_handle_t bus) {
     {
         Settings s("nexi");
         touch_mode = s.GetInt("touchp", 0) & 7;
+        scr_off_sec = s.GetInt("scroff", 60);
         screen_mode = s.GetInt("screenp", 0) & 3;
     }
     nexi::alarm::on_ui = alarm_ui;
@@ -381,6 +444,9 @@ inline void Init(i2c_master_bus_handle_t bus) {
     lv_obj_add_event_cb(star, [](lv_event_t*) {
         if (star_down && lv_tick_elaps(star_down) > 5000) { star_down = 0; lv_async_call([](void*) { wiz_start(); }, nullptr); }
     }, LV_EVENT_PRESSING, nullptr);
+
+    last_act = lv_tick_get();
+    lv_timer_create(scr_tick, 1000, nullptr);
 
     // первое включение — сразу первая настройка
     {
