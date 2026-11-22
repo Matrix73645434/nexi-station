@@ -224,7 +224,7 @@ inline lv_obj_t* slider_row(lv_obj_t* parent, const char* title, int min, int ma
 }
 
 // ------------------------------------------------------------------ игра: крестики-нолики против Nexi
-// Ты — X, Nexi — O. Nexi играет хорошо, но иногда зевает (иначе её не обыграть). Кто ходит первым — по очереди.
+// Ты — X, Nexi — O. Nexi играет хорошо, но иногда зевает (иначе её не обыграть); Nexi — девушка, о себе в женском роде. Кто ходит первым — по очереди.
 namespace ttt {
 inline int cell[9];                 // 0 пусто, 1 ты, 2 Nexi
 inline lv_obj_t* root = nullptr;    // экран игры (он же panel, пока открыт)
@@ -274,7 +274,7 @@ inline int nexi_move() {
 inline void finish(int w) {
     over = true;
     static const char* const lose[] = {"Ты победил! Реванш?", "Ладно, ты сильнее... пока что", "Повезло! Ещё раз?"};
-    static const char* const win[] = {"Я победил! Ещё?", "Хе-хе, моя взяла", "Не расстраивайся, бывает"};
+    static const char* const win[] = {"Я победила! Ещё?", "Хе-хе, моя взяла", "Не расстраивайся, бывает"};
     static const char* const drw[] = {"Ничья! Ещё?", "Ничья. Достойно!", "Никто не сдался"};
     if (w == 1) { you++; say(pick(lose, 3)); }
     else if (w == 2) { nexi++; say(pick(win, 3)); }
@@ -282,7 +282,7 @@ inline void finish(int w) {
     draw();
 }
 inline void nexi_turn(lv_timer_t*) {
-    if (over || !root || panel != root) return;   // игру закрыли, пока Nexi «думал»
+    if (over || !root || panel != root) return;   // игру закрыли, пока Nexi «думала»
     int m = nexi_move();
     if (m >= 0) cell[m] = 2;
     draw();
@@ -294,7 +294,7 @@ inline void reset() {
     over = false;
     nexi_first = !nexi_first;
     draw();
-    if (nexi_first) { say("Я хожу первым..."); later(nexi_turn, 600); }
+    if (nexi_first) { say("Я хожу первой..."); later(nexi_turn, 600); }
     else say("Твой ход: ты — X");
 }
 inline void tap(lv_event_t* e) {

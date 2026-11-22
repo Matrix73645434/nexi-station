@@ -147,7 +147,7 @@ inline bool install(const std::string& url, int ver) {
         return false;
     }
     if (esp_https_ota_finish(h) != ESP_OK) { ESP_LOGE(TAG, "finish failed (битый файл?)"); progress = -1; status(""); return false; }
-    status("Обновился! Перезагружаюсь…");
+    status("Обновилась! Перезагружаюсь…");
     vTaskDelay(pdMS_TO_TICKS(1500));
     esp_restart();
     return true;
