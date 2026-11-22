@@ -9,6 +9,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdlib>
 #include <atomic>
 #include <cstring>
 #include <mutex>
@@ -404,12 +405,22 @@ inline bool Stop() {
     return true;
 }
 
+// часы в верхней строке (xiaozhi) берут localtime() — без TZ показывают UTC. POSIX пишет смещение наоборот: UTC+7 → «-07:00».
+inline void apply_tz(int minutes) {
+    char tz[24];
+    int a = minutes < 0 ? -minutes : minutes;
+    snprintf(tz, sizeof(tz), "NX%c%02d:%02d", minutes >= 0 ? '-' : '+', a / 60, a % 60);
+    setenv("TZ", tz, 1);
+    tzset();
+}
+
 inline void task(void*) {
     {
         Settings s("nexi");
         at = s.GetInt("alarm", 0);
         tz_min = s.GetInt("tz", 420);
     }
+    apply_tz(tz_min);
     vTaskDelay(pdMS_TO_TICKS(3000));
     show();
     for (;;) {
@@ -452,6 +463,7 @@ inline void handle_nexi(cJSON* root) {
         Settings s("nexi", true);
         s.SetInt("tz", tz->valueint);
     }
+    if (cJSON_IsNumber(tz)) alarm::apply_tz(tz->valueint);
     cJSON* a = cJSON_GetObjectItem(root, "alarm");
     if (cJSON_IsNumber(a)) {
         if (a->valuedouble <= 0) { if (!alarm::Stop()) alarm::Set(0); }

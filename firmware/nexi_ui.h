@@ -6,6 +6,7 @@
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_touch_ft5x06.h>
 #include <esp_log.h>
+#include <esp_random.h>
 #include <esp_lvgl_port.h>
 #include <lvgl.h>
 
@@ -222,6 +223,153 @@ inline lv_obj_t* slider_row(lv_obj_t* parent, const char* title, int min, int ma
     return s;
 }
 
+// ------------------------------------------------------------------ игра: крестики-нолики против Nexi
+// Ты — X, Nexi — O. Nexi играет хорошо, но иногда зевает (иначе её не обыграть). Кто ходит первым — по очереди.
+namespace ttt {
+inline int cell[9];                 // 0 пусто, 1 ты, 2 Nexi
+inline lv_obj_t* root = nullptr;    // экран игры (он же panel, пока открыт)
+inline void later(lv_timer_cb_t cb, uint32_t ms) { lv_timer_t* t = lv_timer_create(cb, ms, nullptr); lv_timer_set_repeat_count(t, 1); }
+inline lv_obj_t* btn[9];
+inline lv_obj_t* status = nullptr;
+inline lv_obj_t* score_l = nullptr;
+inline int you = 0, nexi = 0, draws = 0;
+inline bool over = false, nexi_first = false;
+inline const int L[8][3] = {{0,1,2},{3,4,5},{6,7,8},{0,3,6},{1,4,7},{2,5,8},{0,4,8},{2,4,6}};
+
+inline int winner() {
+    for (auto& l : L) if (cell[l[0]] && cell[l[0]] == cell[l[1]] && cell[l[1]] == cell[l[2]]) return cell[l[0]];
+    for (int i = 0; i < 9; i++) if (!cell[i]) return 0;
+    return 3;   // ничья
+}
+inline const char* pick(const char* const* a, int n) { return a[esp_random() % n]; }
+inline void say(const char* t) { if (status) lv_label_set_text(status, t); }
+inline void draw() {
+    for (int i = 0; i < 9; i++) {
+        lv_obj_t* l = lv_obj_get_child(btn[i], 0);
+        lv_label_set_text(l, cell[i] == 1 ? "X" : cell[i] == 2 ? "O" : "");
+        lv_obj_set_style_text_color(l, cell[i] == 1 ? lv_color_hex(0xFFFFFF) : lv_color_hex(0xC9B8FF), 0);
+    }
+    static char sc[48];
+    snprintf(sc, sizeof(sc), "Ты %d : %d Nexi", you, nexi);
+    if (score_l) lv_label_set_text(score_l, sc);
+}
+// ход Nexi: выиграть → помешать → центр → угол → что есть; в 1 из 4 ходов — просто наугад
+inline int nexi_move() {
+    int free_[9], nf = 0;
+    for (int i = 0; i < 9; i++) if (!cell[i]) free_[nf++] = i;
+    if (!nf) return -1;
+    if (esp_random() % 4 == 0) return free_[esp_random() % nf];
+    for (int who : {2, 1})
+        for (auto& l : L) {
+            int c = 0, e = -1;
+            for (int k = 0; k < 3; k++) { if (cell[l[k]] == who) c++; else if (!cell[l[k]]) e = l[k]; }
+            if (c == 2 && e >= 0) return e;
+        }
+    if (!cell[4]) return 4;
+    int corners[4] = {0, 2, 6, 8}, nc = 0, cs[4];
+    for (int c : corners) if (!cell[c]) cs[nc++] = c;
+    if (nc) return cs[esp_random() % nc];
+    return free_[esp_random() % nf];
+}
+inline void finish(int w) {
+    over = true;
+    static const char* const lose[] = {"Ты победил! Реванш?", "Ладно, ты сильнее... пока что", "Повезло! Ещё раз?"};
+    static const char* const win[] = {"Я победила! Ещё?", "Хе-хе, моя взяла", "Не расстраивайся, бывает"};
+    static const char* const drw[] = {"Ничья! Ещё?", "Ничья. Достойно!", "Никто не сдался"};
+    if (w == 1) { you++; say(pick(lose, 3)); }
+    else if (w == 2) { nexi++; say(pick(win, 3)); }
+    else { draws++; say(pick(drw, 3)); }
+    draw();
+}
+inline void nexi_turn(lv_timer_t*) {
+    if (over || !root || panel != root) return;   // игру закрыли, пока Nexi «думала»
+    int m = nexi_move();
+    if (m >= 0) cell[m] = 2;
+    draw();
+    int w = winner();
+    if (w) finish(w); else say("Твой ход");
+}
+inline void reset() {
+    for (int& c : cell) c = 0;
+    over = false;
+    nexi_first = !nexi_first;
+    draw();
+    if (nexi_first) { say("Я хожу первой..."); later(nexi_turn, 600); }
+    else say("Твой ход: ты — X");
+}
+inline void tap(lv_event_t* e) {
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    if (over) { reset(); return; }   // игра закончилась — касание по полю начинает новую
+    if (cell[i]) return;
+    // ход Nexi ещё не сделан (таймер) — ждём
+    int mine = 0, hers = 0;
+    for (int c : cell) { if (c == 1) mine++; else if (c == 2) hers++; }
+    if (mine > hers || (nexi_first && mine == hers)) return;
+    cell[i] = 1;
+    draw();
+    int w = winner();
+    if (w) { finish(w); return; }
+    static const char* const think[] = {"Хм...", "Так-так...", "Думаю...", "Интересно..."};
+    say(pick(think, 4));
+    later(nexi_turn, 500);
+}
+}  // namespace ttt
+
+inline void open_game() {
+    close_panel();
+    panel = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(panel, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x161829), 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(panel, 0, 0);
+    lv_obj_set_style_radius(panel, 0, 0);
+    lv_obj_set_style_pad_all(panel, 8, 0);
+    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    ttt::root = panel;
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(panel, 6, 0);
+
+    lv_obj_t* head = lv_obj_create(panel);
+    lv_obj_remove_style_all(head);
+    lv_obj_set_size(head, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    ttt::score_l = label(head, "");
+    lv_obj_t* x = button(head, "Выход", [](lv_event_t*) { ttt::root = nullptr; ttt::status = nullptr; ttt::score_l = nullptr; close_panel(); });
+    lv_obj_set_width(x, 84);
+
+    ttt::status = label(panel, "");
+    lv_obj_set_style_text_color(ttt::status, lv_color_hex(0xB9A8FF), 0);
+
+    lv_obj_t* grid = lv_obj_create(panel);
+    lv_obj_remove_style_all(grid);
+    lv_obj_set_size(grid, 3 * 64 + 2 * 6, 3 * 64 + 2 * 6);
+    lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_style_pad_row(grid, 6, 0);
+    lv_obj_set_style_pad_column(grid, 6, 0);
+    lv_obj_remove_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < 9; i++) {
+        lv_obj_t* b = lv_obj_create(grid);
+        lv_obj_remove_style_all(b);
+        lv_obj_set_size(b, 64, 64);
+        lv_obj_set_style_bg_color(b, lv_color_hex(0x2A2D4A), 0);
+        lv_obj_set_style_bg_color(b, lv_color_hex(0x3A3E66), LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(b, 12, 0);
+        lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t* l = label(b, "");
+        lv_obj_set_style_transform_scale(l, 512, 0);   // крупно (×2)
+        lv_obj_set_style_transform_pivot_x(l, LV_PCT(50), 0);
+        lv_obj_set_style_transform_pivot_y(l, LV_PCT(50), 0);
+        lv_obj_center(l);
+        lv_obj_add_event_cb(b, ttt::tap, LV_EVENT_CLICKED, (void*)(intptr_t)i);
+        ttt::btn[i] = b;
+    }
+    ttt::reset();
+}
+
 inline void open_panel() {
     if (panel) return;
     auto& board = Board::GetInstance();
@@ -285,6 +433,9 @@ inline void open_panel() {
         lv_label_set_text(lv_obj_get_child((lv_obj_t*)lv_event_get_target(e), 0), scr_txt);
     });
     lv_obj_set_width(so, LV_PCT(100));
+
+    lv_obj_t* g = button(panel, "Крестики-нолики", [](lv_event_t*) { lv_async_call([](void*) { open_game(); }, nullptr); });
+    lv_obj_set_width(g, LV_PCT(100));
 }
 
 // экран первой настройки: приветствие, кружок для нажатия, «готово»
@@ -342,17 +493,9 @@ inline lv_obj_t* alarm_ring = nullptr;
 inline void alarm_ui(int state, int hh, int mm) {
     if (!lvgl_port_lock(300)) return;
     if (alarm_ring && state != 2) { lv_obj_delete_async(alarm_ring); alarm_ring = nullptr; }
-    if (state == 1) {
-        if (!alarm_label) {
-            alarm_label = label(lv_layer_top(), "");
-            lv_obj_set_style_text_color(alarm_label, lv_color_hex(0xB9A8FF), 0);
-            lv_obj_align(alarm_label, LV_ALIGN_BOTTOM_LEFT, 10, -16);
-        }
-        static char buf[32];
-        snprintf(buf, sizeof(buf), "Будильник %02d:%02d", hh, mm);
-        lv_label_set_text(alarm_label, buf);
-        lv_obj_remove_flag(alarm_label, LV_OBJ_FLAG_HIDDEN);
-    } else if (alarm_label) {
+    // заведённый будильник отдельной надписью больше не показываем — она налезала на текст ответа
+    (void)hh; (void)mm;
+    if (alarm_label) {
         lv_obj_add_flag(alarm_label, LV_OBJ_FLAG_HIDDEN);
     }
     if (state == 2 && !alarm_ring) {
